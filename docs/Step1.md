@@ -20,12 +20,11 @@ Add a few NuGet packages we'll need.
 
 ```shell
 dotnet add package Microsoft.ML.TimeSeries
-dotnet add package XPlot.Plotly
-dotnet add package FSharp.Core
+dotnet add package Plotly.NET.CSharp
 ```
 
 We'll be using **Microsoft.ML.TimeSeries** to make predictions based on time-series data.
-We'll use **XPlot.Plotly** and **FSharp.Core** to chart our results.
+We'll use **Plotly.NET.CSharp** to chart our results.
 
 ## Build
 

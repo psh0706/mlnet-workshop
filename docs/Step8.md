@@ -8,26 +8,10 @@ We'll use the data files we have with SQL Statement wait times from SolarWinds D
 
 We will need to distinguish which time series are stocks and which are database wait times.
 
-Go back to the `TimeSeries` class and add a `Group` property.
+Go back to the `TimeSeries` record and add a `Group` property.
 
 ```csharp
-public string Group { get; }
-```
-
-Initialize the new property in the constructor.
-
-```csharp
-public TimeSeries(
-    string name,
-    IEnumerable<Observation> observations,
-    TimeSpan interval,
-    string group)
-{
-    Name = name;
-    Observations = observations.ToArray();
-    Interval = interval;
-    Group = group;
-}
+record TimeSeries(string Name, IEnumerable<Observation> Observations, TimeSpan Interval, string Group);
 ```
 
 ## Assign a Group for Stocks
@@ -39,10 +23,10 @@ To fix the compiler error, update the `Load` method of `StockLoader` to pass a g
 TimeSeries[] timeSeriesList = stocks
     .ToLookup(stock => stock.Name)
     .Select(group => new TimeSeries(
-        name: group.Key,
-        observations: group.Select(s => s.ToObservation()),
-        interval: TimeSpan.FromDays(1),
-        group: "Stocks"))
+        Name: group.Key,
+        Observations: group.Select(s => s.ToObservation()),
+        Interval: TimeSpan.FromDays(1),
+        Group: "Stock"))
     .ToArray();
 ```
 
@@ -53,24 +37,16 @@ Add a class like `Stock` to describe the columns of the database wait time CSV f
 Add a new **WaitTime.cs** file with this class definition:
 
 ```csharp
-using System;
 using Microsoft.ML.Data;
 
-namespace Anomalies
+class WaitTime
 {
-    public class WaitTime
-    {
-        [LoadColumn(0)] public DateTime Date;
-        [LoadColumn(1)] public float QueryWaitTime;
+    [LoadColumn(0)] public DateTime Date;
+    [LoadColumn(1)] public float QueryWaitTime;
 
-        internal Observation ToObservation()
-        {
-            return new Observation
-            {
-                Date = Date,
-                Value = QueryWaitTime
-            };
-        }
+    internal Observation ToObservation()
+    {
+        return new Observation(Date, QueryWaitTime);
     }
 }
 ```
@@ -82,75 +58,69 @@ Now add a class similar to `StockLoader` to load data from our CSV files with da
 Add a new **WaitTimeLoader.cs** file with this class definition:
 
 ```csharp
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using Microsoft.ML;
 
-namespace Anomalies
+static class WaitTimeLoader
 {
-    internal static class WaitTimeLoader
+    public static TimeSeries[] Load()
     {
-        public static TimeSeries[] Load()
+        // Create an ML.NET machine learning context.
+        var context = new MLContext();
+
+        // Get the path to the CSV files.
+        string? rootFolder = Directory.GetParent(Environment.CurrentDirectory)?.FullName;
+        if (rootFolder == null)
         {
-            // Create an ML.NET machine learning context.
-            var context = new MLContext();
-
-            // Get the path to the CSV files.
-            string rootFolder = Directory.GetParent(Environment.CurrentDirectory).FullName;
-            string dataFolder = Path.Combine(rootFolder, "data");
-            string[] csvFiles = Directory.GetFiles(dataFolder, "Wait_Time_Sample_*.csv");
-
-            // Load data from the CSV files.
-            var timeSeriesList = new List<TimeSeries>();
-            foreach (string csvFile in csvFiles)
-            {
-                Console.WriteLine($"Loading database wait times from '{csvFile}'...");
-                IDataView dataView = context.Data.LoadFromTextFile<WaitTime>(path: csvFile, hasHeader: true, separatorChar: ',');
-                WaitTime[] waitTimes = context.Data.CreateEnumerable<WaitTime>(dataView, reuseRowObject: false).ToArray();
-
-                // Convert to time series.
-                var timeSeries = new TimeSeries(
-                    name: Path.GetFileName(csvFile),
-                    observations: waitTimes.Select(s => s.ToObservation()),
-                    interval: TimeSpan.FromHours(1),
-                    group: "Database Wait Times");
-
-                timeSeriesList.Add(timeSeries);
-            }
-
-            return timeSeriesList.ToArray();
+            throw new Exception("Could not find root folder.");
         }
+        string dataFolder = Path.Combine(rootFolder, "data");
+        string[] csvFiles = Directory.GetFiles(dataFolder, "Wait_Time_Sample_*.csv");
+
+        // Load data from the CSV files.
+        var timeSeriesList = new List<TimeSeries>();
+        foreach (string csvFile in csvFiles)
+        {
+            Console.WriteLine($"Loading database wait times from '{csvFile}'...");
+            IDataView dataView = context.Data.LoadFromTextFile<WaitTime>(path: csvFile, hasHeader: true, separatorChar: ',');
+            WaitTime[] waitTimes = context.Data.CreateEnumerable<WaitTime>(dataView, reuseRowObject: false).ToArray();
+
+            // Convert to time series.
+            var timeSeries = new TimeSeries(
+                Name: Path.GetFileName(csvFile),
+                Observations: waitTimes.Select(s => s.ToObservation()),
+                Interval: TimeSpan.FromHours(1),
+                Group: "Database Wait Times");
+
+            timeSeriesList.Add(timeSeries);
+        }
+
+        return timeSeriesList.ToArray();
     }
 }
 ```
 
 ## Process Stocks and Wait Times
 
-Update the `Main` method of the `Program` class to load and analyze both stock and database wait time time series.
+Update the top-level statements of the **Program.cs** file to load and analyze both stock and database wait time time series.
 
 ```csharp
-static void Main(string[] args)
-{
-    TimeSeries[] stockSeries = StockLoader.Load();
-    TimeSeries[] waitTimeSeries = WaitTimeLoader.Load();
-    TimeSeries[] timeSeriesList = waitTimeSeries.Concat(stockSeries).ToArray();
-    TimeSeriesAnalysis[] analysisResults = Analyze(timeSeriesList).ToArray();
-    ShowCharts(analysisResults);
-    Console.WriteLine("Finished!");
-}
+TimeSeries[] stockSeries = StockLoader.Load();
+TimeSeries[] waitTimeSeries = WaitTimeLoader.Load();
+TimeSeries[] timeSeriesList = waitTimeSeries.Concat(stockSeries).ToArray();
+TimeSeriesAnalysis[] analysisResults = Analyze(timeSeriesList).ToArray();
+ShowCharts(analysisResults);
+Console.WriteLine("Finished!");
 ```
 
 ## Show Histograms by Group
 
-Finally, let's update the `ShowCharts` method in the `Program` class.  Replace the logic generating a histogram only for stocks with the following code.
+Finally, let's update the `ShowCharts` method in the **Program.cs** file. Replace the logic generating a histogram only for stocks with the following code.
 This generates a histogram for each time series group.
 
 ```csharp
 foreach (IGrouping<string, TimeSeriesAnalysis> analysisGroup in analysisResults.ToLookup(a => a.TimeSeries.Group))
 {
-    PlotlyChart histogram = HistogramBuilder.BuildHistogram(analysisGroup.Key, analysisGroup.ToList());
+    GenericChart.GenericChart histogram = HistogramBuilder.BuildHistogram(analysisGroup.Key, analysisGroup.ToList());
     charts.Add(histogram);
 }
 ```

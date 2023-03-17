@@ -4,90 +4,82 @@ We have stock market time-series data in memory now, but it'd be more useful if 
 
 ## Add a TimeSeriesAnalysis Class
 
-Eventually, we're going to want to generate forecasts for our time series, so let's add a class to bundle the raw time-series data with the associated predictions.
+Eventually, we're going to want to generate forecasts for our time series, so let's add a record to bundle the raw time-series data with the associated predictions.
 Add a new **TimeSeriesAnalysis.cs** file with this class definition:
 
 ```csharp
-namespace Anomalies
-{
-    internal class TimeSeriesAnalysis
-    {
-        public TimeSeries TimeSeries { get; }
-
-        public TimeSeriesAnalysis(TimeSeries timeSeries)
-        {
-            TimeSeries = timeSeries;
-        }
-    }
-}
+record TimeSeriesAnalysis(TimeSeries TimeSeries);
 ```
 
 ## Add a ChartBuilder Class
 
-We added the [XPlot.Plotly](https://fslab.org/XPlot/plotly.html) NuGet package back in [step 1](./Step1.md).
+We added the [Plotly.NET.CSharp](https://plotly.net) NuGet package back in [step 1](./Step1.md).
 Let's put it to use now.
 Add a new **ChartBuilder.cs** file with this class definition:
 
 ```csharp
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using XPlot.Plotly;
+using Microsoft.FSharp.Collections;
+using Plotly.NET;
+using Plotly.NET.LayoutObjects;
 
-namespace Anomalies
+static class ChartBuilder
 {
-    internal static class ChartBuilder
+    public static GenericChart.GenericChart BuildChart(TimeSeriesAnalysis analysis)
     {
-        public static PlotlyChart BuildChart(TimeSeriesAnalysis analysis)
-        {
-            IEnumerable<Graph.Trace> traces = BuildTraces(analysis);
-            PlotlyChart chart = BuildPlotlyChart(analysis.TimeSeries.Name, traces);
-            return chart;
-        }
+        IEnumerable<Trace> traces = BuildTraces(analysis);
+        FSharpList<Trace> fSharpTraces = ListModule.OfSeq(traces);
+        GenericChart.GenericChart chart = BuildPlotlyChart(analysis.TimeSeries.Name, fSharpTraces);
+        return chart;
+    }
 
-        private static IEnumerable<Graph.Trace> BuildTraces(TimeSeriesAnalysis analysis)
-        {
-            yield return BuildTrace("Historical", analysis.TimeSeries.Observations);
-        }
+    private static IEnumerable<Trace> BuildTraces(TimeSeriesAnalysis analysis)
+    {
+        yield return BuildTrace("Historical", analysis.TimeSeries.Observations);
+    }
 
-        private static Graph.Trace BuildTrace(string name, IEnumerable<Observation> observations)
-        {
-            DateTime[] dates = observations.Select(s => s.Date).ToArray();
-            float[] values = observations.Select(s => s.Value).ToArray();
+    private static Trace BuildTrace(string name, IEnumerable<Observation> observations)
+    {
+        DateTime[] dates = observations.Select(s => s.Date).ToArray();
+        float[] values = observations.Select(s => s.Value).ToArray();
 
-            return new Graph.Scatter()
-            {
-                name = name,
-                x = dates,
-                y = values
-            };
-        }
+        var trace = new Trace("scatter");
+        trace.SetValue("name", name);
+        trace.SetValue("x", dates);
+        trace.SetValue("y", values);
 
-        private static PlotlyChart BuildPlotlyChart(string chartTitle, IEnumerable<Graph.Trace> traces)
-        {
-            PlotlyChart chart = Chart.Plot(traces);
+        return trace;
+    }
 
-            var layout = new Layout.Layout { title = chartTitle };
-            chart.WithLayout(layout);
-            chart.Width = 800;
-            chart.Height = 500;
-            chart.WithXTitle("Date");
-            chart.WithYTitle("Value");
-            chart.WithLegend(true);
+    private static GenericChart.GenericChart BuildPlotlyChart(string chartTitle, FSharpList<Trace> traces)
+    {
+        LinearAxis xAxis = new LinearAxis();
+        xAxis.SetValue("title", "Date");
 
-            return chart;
-        }
+        LinearAxis yAxis = new LinearAxis();
+        yAxis.SetValue("title", "Value");
+
+        Layout layout = new Layout();
+        layout.SetValue("xaxis", xAxis);
+        layout.SetValue("yaxis", yAxis);
+        layout.SetValue("showlegend", true);
+        layout.SetValue("width", 800);
+        layout.SetValue("height", 500);
+
+        return Plotly.NET.GenericChart
+            .ofTraceObjects(true, traces)
+            .WithLayout(layout)
+            .WithTitle(chartTitle);
     }
 }
 ```
 
 ## Generate Time-Series Analysis
 
-Now we're ready to pull things together back in the main `Program` class.
+Now we're ready to pull things together back in the main **Program.cs** file.
 First, let's add an `Analyze` method to create a `TimeSeriesAnalysis` for each `TimeSeries`.
 
 ```csharp
-private static IEnumerable<TimeSeriesAnalysis> Analyze(IEnumerable<TimeSeries> timeSeriesList)
+static IEnumerable<TimeSeriesAnalysis> Analyze(IEnumerable<TimeSeries> timeSeriesList)
 {
     foreach (TimeSeries timeSeries in timeSeriesList)
     {
@@ -97,56 +89,47 @@ private static IEnumerable<TimeSeriesAnalysis> Analyze(IEnumerable<TimeSeries> t
 }
 ```
 
-This will require a new `using` statement at the top of the file.
-
-```csharp
-using System.Collections.Generic;
-```
-
 ## Show Charts
 
-Next, we need another method in the `Program` class to build and display all our charts.
+Next, we need another method in the **Program.cs** file to build and display all our charts.
 
 ```csharp
-private static void ShowCharts(IEnumerable<TimeSeriesAnalysis> analysisResults)
+static void ShowCharts(TimeSeriesAnalysis[] analysisResults)
 {
-    var charts = new List<PlotlyChart>();
+    var charts = new List<GenericChart.GenericChart>();
 
     foreach (TimeSeriesAnalysis analysis in analysisResults)
     {
-        PlotlyChart chart = ChartBuilder.BuildChart(analysis);
+        GenericChart.GenericChart chart = ChartBuilder.BuildChart(analysis);
         charts.Add(chart);
     }
 
-    Chart.ShowAll(charts);
+    charts.ForEach(chart => chart.Show());
 }
 ```
 
 This will require another new `using` statement at the top of the file.
 
 ```csharp
-using XPlot.Plotly;
+using Plotly.NET;
 ```
 
 ## Pull It All Together
 
 It's the moment of truth.
-Update the `Main` method to call our new helper methods.
+Update the top-level statements to call our new helper methods.
 
 ```csharp
-static void Main(string[] args)
-{
-    TimeSeries[] stockSeries = StockLoader.Load();
-    IEnumerable<TimeSeriesAnalysis> analysisResults = Analyze(stockSeries);
-    ShowCharts(analysisResults);
-    Console.WriteLine("Finished!");
-}
+TimeSeries[] stockSeries = StockLoader.Load();
+IEnumerable<TimeSeriesAnalysis> analysisResults = Analyze(stockSeries);
+ShowCharts(analysisResults);
+Console.WriteLine("Finished!");
 ```
 
 ## Test
 
 Let's build and run to see if everything worked.
-The call to `Chart.ShowAll()` should launch your default web browser to view an HTML file **XPlot.Plotly** wrote to a temp folder.
+The call to `chart.Show()` should launch your default web browser to view an HTML file **Plotly.NET** wrote to a temp folder.
 
 ![alt text](./images/raw-time-series.png "Example stock time series from XPlot.Plotly chart")
 

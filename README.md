@@ -6,11 +6,11 @@ We'll develop a simple framework for evaluating the quality of predictions from 
 
 ## Prerequisites
 
-Before the workshop, you'll need to install Git, Visual Studio Code, and the .NET Core 3.0 SDK:
+Before the workshop, you'll need to install Git, Visual Studio Code, and the .NET Core 7.0 SDK:
 
 * [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 * [Visual Studio Code](https://code.visualstudio.com/download)
-* [.NET Core SDK 3.0.101](https://dotnet.microsoft.com/download/dotnet-core/3.0)
+* [.NET Core SDK 7.0.4](https://dotnet.microsoft.com/en-us/download/dotnet/7.0)
 
 Mac and Linux users may also need to install the [Intel Math Kernel Library](https://software.intel.com/en-us/mkl) until issue [Unable to load shared library 'MklImports' or one of its dependencies. #3903](https://github.com/dotnet/machinelearning/issues/3903) is resolved.
 

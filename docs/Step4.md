@@ -8,26 +8,10 @@ Let's add a forecast based on a very simple [linear regression](https://en.wikip
 If we're going to forecast, we need a structure to store the predicted values.
 We'll also add an algorithm name, since we want to add more options with ML.NET.
 
-Add a new **ForecastDetails.cs** file with this class definition:
+Add a new **ForecastDetails.cs** file with this record definition:
 
 ```csharp
-using System.Collections.Generic;
-using System.Linq;
-
-namespace Anomalies
-{
-    internal class ForecastDetails
-    {
-        public string AlgorithmName { get; }
-        public Observation[] Forecast { get; }
-
-        public ForecastDetails(string algorithmName, IEnumerable<Observation> forecast)
-        {
-            AlgorithmName = algorithmName;
-            Forecast = forecast.ToArray();
-        }
-    }
-}
+record ForecastDetails(string AlgorithmName, IEnumerable<Observation> Forecast);
 ```
 
 ## Expand TimeSeriesAnalysis Structure
@@ -41,51 +25,31 @@ We can compare the predicted values to the actual values to see how accurate the
 Go back to the `TimeSeriesAnalysis` class we created earlier, and add some new properties:
 
 ```csharp
-using System.Collections.Generic;
-using System.Linq;
-
-namespace Anomalies
-{
-    internal class TimeSeriesAnalysis
-    {
-        public TimeSeries TimeSeries { get; }
-        public Observation[] Historical { get; }
-        public Observation[] Actual { get; }
-        public ForecastDetails[] Forecasts { get; }
-
-        public TimeSeriesAnalysis(
-            TimeSeries timeSeries,
-            IEnumerable<Observation> historical,
-            IEnumerable<Observation> actual,
-            IEnumerable<ForecastDetails> forecasts)
-        {
-            TimeSeries = timeSeries;
-            Historical = historical.ToArray();
-            Actual = actual.ToArray();
-            Forecasts = forecasts.ToArray();
-        }
-    }
-}
+record TimeSeriesAnalysis(
+    TimeSeries TimeSeries,
+    IEnumerable<Observation> Historical,
+    IEnumerable<Observation> Actual,
+    IEnumerable<ForecastDetails> Forecasts);
 ```
 
 We changed the constructor, so we'll need some changes before that will compile.
 
 ## Split Historical and Actual Data
 
-Return to the `Program` class to fix the call to the `TimeSeriesAnalysis` constructor.
+Return to the **Program.cs** file to fix the call to the `TimeSeriesAnalysis` constructor.
 Update the `Analyze` method to split the time series observations into historical and actual data.
 Create an empty list of `ForecastDetails` for now, since we don't yet have a forecasting algorithm.
 
 ```csharp
-private static IEnumerable<TimeSeriesAnalysis> Analyze(IEnumerable<TimeSeries> timeSeriesList)
+static IEnumerable<TimeSeriesAnalysis> Analyze(IEnumerable<TimeSeries> timeSeriesList)
 {
     const int horizon = 100;
 
     foreach (TimeSeries timeSeries in timeSeriesList)
     {
-        Observation[] observations = timeSeries.Observations;
-        Observation[] historical = observations.Take(observations.Length - horizon).ToArray();
-        Observation[] actual = observations.Skip(observations.Length - horizon).ToArray();
+        var observations = timeSeries.Observations.ToArray();
+        var historical = observations.Take(observations.Length - horizon).ToArray();
+        var actual = observations.Skip(observations.Length - horizon).ToArray();
 
         var forecasts = new List<ForecastDetails>();
 
@@ -98,12 +62,6 @@ private static IEnumerable<TimeSeriesAnalysis> Analyze(IEnumerable<TimeSeries> t
 Note the choice of 100 for the `horizon` is arbitrary.
 You can adjust the value depending on how far into the future you want to predict.
 
-A new `using` statement will be required at the top of the file.
-
-```csharp
-using System.Linq;
-```
-
 ## Prepare Charts for Forecasting
 
 Return to `ChartBuilder` and update the `BuildTraces` method as follows.
@@ -111,9 +69,9 @@ Each chart now divides the real time-series data into historical and actual data
 Once we've predicted values, those will also be displayed.
 
 ```csharp
-private static IEnumerable<Graph.Trace> BuildTraces(TimeSeriesAnalysis analysis)
+private static IEnumerable<Trace> BuildTraces(TimeSeriesAnalysis analysis)
 {
-    yield return BuildTrace("Historical", analysis.Historical);
+    yield return BuildTrace("Historical", analysis.TimeSeries.Observations);
     yield return BuildTrace("Actual", analysis.Actual);
 
     foreach (ForecastDetails forecastDetails in analysis.Forecasts)
@@ -136,30 +94,10 @@ Click and drag on the chart to zoom in for a closer look.
 
 Before we can really do linear regression, we'll need to know the expected interval between observations in our time series.
 
-Revisit the `TimeSeries` class to add an `Interval` property.
+Revisit the `TimeSeries` record to add an `Interval` property.
 
 ```csharp
-public TimeSpan Interval { get; }
-```
-
-This requires a new `using` statement.
-
-```csharp
-using System;
-```
-
-Initialize that property from the constructor.
-
-```csharp
-public TimeSeries(
-    string name,
-    IEnumerable<Observation> observations,
-    TimeSpan interval)
-{
-    Name = name;
-    Observations = observations.ToArray();
-    Interval = interval;
-}
+record TimeSeries(string Name, IEnumerable<Observation> Observations, TimeSpan Interval);
 ```
 
 Before the project will build, we must update the `StockLoader` to specify an interval of one day when loading stock prices.
@@ -169,9 +107,9 @@ Before the project will build, we must update the `StockLoader` to specify an in
 TimeSeries[] timeSeriesList = stocks
     .ToLookup(stock => stock.Name)
     .Select(group => new TimeSeries(
-        name: group.Key,
-        observations: group.Select(s => s.ToObservation()),
-        interval: TimeSpan.FromDays(1)))
+        Name: group.Key,
+        Observations: group.Select(s => s.ToObservation()),
+        Interval: TimeSpan.FromDays(1)))
     .ToArray();
 ```
 
@@ -184,57 +122,50 @@ It finds a straight line that is a good fit for the data by minimizing a cost fu
 Add a new **LinearRegressionForecaster.cs** file with this class definition:
 
 ```csharp
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
-namespace Anomalies
+class LinearRegressionForecaster
 {
-    internal class LinearRegressionForecaster
+    public static Observation[] Forecast(Observation[] observations, int horizon, TimeSpan interval)
     {
-        public static Observation[] Forecast(Observation[] observations, int horizon, TimeSpan interval)
+        // Convert the observations into (x,y) points.
+        float[] x = observations.Select(o => (float)o.Date.Ticks).ToArray();
+        float[] y = observations.Select(o => o.Value).ToArray();
+
+        // Use linear regression to fit a line to the points.
+        (float intercept, float slope) = FitLine(x, y);
+
+        // Use the slope/intercept definition of the line to predict future values.
+        var predictions = new List<Observation>();
+        DateTime currentTime = observations.Last().Date;
+
+        for (int i = 0; i < horizon; i++)
         {
-            // Convert the observations into (x,y) points.
-            float[] x = observations.Select(o => (float)o.Date.Ticks).ToArray();
-            float[] y = observations.Select(o => o.Value).ToArray();
-
-            // Use linear regression to fit a line to the points.
-            (float intercept, float slope) = FitLine(x, y);
-
-            // Use the slope/intercept definition of the line to predict future values.
-            var predictions = new List<Observation>();
-            DateTime currentTime = observations.Last().Date;
-
-            for (int i = 0; i < horizon; i++)
-            {
-                currentTime = currentTime.Add(interval);
-                float currentX = (float)currentTime.Ticks;
-                float predictedValue = slope * currentX + intercept;
-                var prediction = new Observation { Date = currentTime, Value = predictedValue };
-                predictions.Add(prediction);
-            }
-
-            return predictions.ToArray();
+            currentTime = currentTime.Add(interval);
+            float currentX = (float)currentTime.Ticks;
+            float predictedValue = slope * currentX + intercept;
+            var prediction = new Observation(currentTime, predictedValue);
+            predictions.Add(prediction);
         }
 
-        private static (float intercept, float slope) FitLine(float[] x, float[] y)
+        return predictions.ToArray();
+    }
+
+    private static (float intercept, float slope) FitLine(float[] x, float[] y)
+    {
+        float meanX = x.Sum() / x.Length;
+        float meanY = y.Sum() / y.Length;
+
+        float covariance = 0.0f;
+        float variance = 0.0f;
+
+        for (int i = 0; i < x.Length; i++)
         {
-            float meanX = x.Sum() / x.Length;
-            float meanY = y.Sum() / y.Length;
-
-            float covariance = 0.0f;
-            float variance = 0.0f;
-
-            for (int i = 0; i < x.Length; i++)
-            {
-                float diff = x[i] - meanX;
-                variance += diff * diff;
-                covariance += diff * (y[i] - meanY);
-            }
-
-            float slope = covariance / variance;
-            return (meanY - slope * meanX, slope);
+            float diff = x[i] - meanX;
+            variance += diff * diff;
+            covariance += diff * (y[i] - meanY);
         }
+
+        float slope = covariance / variance;
+        return (meanY - slope * meanX, slope);
     }
 }
 ```
@@ -242,7 +173,7 @@ namespace Anomalies
 ## Use the Forecaster
 
 Our `LinearRegressionForecaster` is ready to go.
-Let's start using it in the `Analyze` method of our `Program` class.
+Let's start using it in the `Analyze` method of our **Program.cs** file.
 Add a few new lines right after the declaration of the `forecasts` variable inside the `foreach` loop.
 
 ```csharp

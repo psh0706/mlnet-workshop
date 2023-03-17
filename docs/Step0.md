@@ -37,9 +37,9 @@ git clean -fxd
 git checkout steps/step-5
 ```
 
-## Verify the .NET Core Version
+## Verify the .NET Version
 
-Make sure you have .NET Core 3.0 or later installed.
+Make sure you have .NET 7.0 or later installed.
 
 ```shell
 dotnet --version

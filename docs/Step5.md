@@ -76,11 +76,7 @@ namespace Anomalies
             {
                 while (expectedDate + tolerance < observation.Date)
                 {
-                    yield return new Observation
-                    {
-                        Date = expectedDate,
-                        Value = lastValue
-                    };
+                    yield return new Observation(expectedDate, lastValue);
 
                     expectedDate = expectedDate.Add(interval);
                 }
@@ -95,18 +91,18 @@ namespace Anomalies
 }
 ```
 
-To put this to use, return to the `Analyze` method in the `Program` class.
+To put this to use, return to the `Analyze` method in the **Program.cs** file.
 Locate the first line inside the `foreach` loop.
 Currently, it reads as follows:
 
 ```csharp
-Observation[] observations = timeSeries.Observations;
+Observation[] observations = timeSeries.Observations.ToArray();
 ```
 
 Replace that line with:
 
 ```csharp
-Observation[] observations = GapFiller.FillGaps(timeSeries.Observations, timeSeries.Interval).ToArray();
+var observations = GapFiller.FillGaps(timeSeries.Observations.ToArray(), timeSeries.Interval).ToArray();
 ```
 
 ## Test Filling the Gaps

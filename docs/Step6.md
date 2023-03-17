@@ -8,49 +8,37 @@ ML.NET has some built-in functions to help with this.
 Add a new **ForecastScorer.cs** file with this class definition:
 
 ```csharp
-using System.Collections.Generic;
 using Microsoft.ML;
 using Microsoft.ML.Data;
 
-namespace Anomalies
+class ForecastScorer
 {
-    internal static class ForecastScorer
+    public static RegressionMetrics Evaluate(Observation[] actual, Observation[] forecast)
     {
-        public static RegressionMetrics Evaluate(Observation[] actual, Observation[] forecast)
+        IEnumerable<Comparison> comparisons = BuildComparisons(actual, forecast);
+
+        var context = new MLContext();
+        IDataView predictions = context.Data.LoadFromEnumerable(comparisons);
+
+        RegressionMetrics regressionMetrics = context.Regression.Evaluate(
+            data: predictions,
+            labelColumnName: nameof(Comparison.Actual),
+            scoreColumnName: nameof(Comparison.Predicted));
+
+        return regressionMetrics;
+    }
+
+    private static IEnumerable<Comparison> BuildComparisons(Observation[] actual, Observation[] forecast)
+    {
+        for (int i = 0; i < actual.Length; i++)
         {
-            IEnumerable<Comparison> comparisons = BuildComparisons(actual, forecast);
+            var comparison = new Comparison(actual[i].Value, forecast[i].Value);
 
-            var context = new MLContext();
-            IDataView predictions = context.Data.LoadFromEnumerable(comparisons);
-
-            RegressionMetrics regressionMetrics = context.Regression.Evaluate(
-                data: predictions,
-                labelColumnName: nameof(Comparison.Actual),
-                scoreColumnName: nameof(Comparison.Predicted));
-
-            return regressionMetrics;
-        }
-
-        private static IEnumerable<Comparison> BuildComparisons(Observation[] actual, Observation[] forecast)
-        {
-            for (int i = 0; i < actual.Length; i++)
-            {
-                var comparison = new Comparison
-                {
-                    Actual = actual[i].Value,
-                    Predicted = forecast[i].Value
-                };
-
-                yield return comparison;
-            }
-        }
-
-        private class Comparison
-        {
-            public float Actual { get; set; }
-            public float Predicted { get; set; }
+            yield return comparison;
         }
     }
+
+    record Comparison(float Actual, float Predicted);
 }
 ```
 
@@ -62,7 +50,10 @@ We want to keep these metrics with the forecast information.
 Update the `ForecastDetails` class by adding a new `RegressionMetrics` property.
 
 ```csharp
-public RegressionMetrics RegressionMetrics { get; }
+record ForecastDetails(
+    string AlgorithmName,
+    IEnumerable<Observation> Forecast,
+    RegressionMetrics RegressionMetrics);
 ```
 
 This requires a new `using` statement.
@@ -71,31 +62,17 @@ This requires a new `using` statement.
 using Microsoft.ML.Data;
 ```
 
-Initialize this property from in the constructor:
-
-```csharp
-public ForecastDetails(
-    string algorithmName,
-    IEnumerable<Observation> forecast,
-    RegressionMetrics regressionMetrics)
-{
-    AlgorithmName = algorithmName;
-    Forecast = forecast.ToArray();
-    RegressionMetrics = regressionMetrics;
-}
-```
-
 ## Invoke Evaluation
 
-Before it can compile, let's update the `Analyze` method in the `Program` class.
+Before it can compile, let's update the `Analyze` method in the **Program.cs** file.
 Revise the chunk of code in the `foreach` loop handling forecasting to look like this:
 
 ```csharp
 var forecasts = new List<ForecastDetails>();
-                Observation[] linearRegressionForecast = LinearRegressionForecaster
-                    .Forecast(historical, horizon, timeSeries.Interval);
-                RegressionMetrics linearRegressionMetrics = ForecastScorer.Evaluate(actual, linearRegressionForecast);
-                forecasts.Add(new ForecastDetails("Linear Regression", linearRegressionForecast, linearRegressionMetrics));
+Observation[] linearRegressionForecast = LinearRegressionForecaster
+    .Forecast(historical, horizon, timeSeries.Interval);
+RegressionMetrics linearRegressionMetrics = ForecastScorer.Evaluate(actual, linearRegressionForecast);
+forecasts.Add(new ForecastDetails("Linear Regression", linearRegressionForecast, linearRegressionMetrics));
 ```
 
 This will require a new `using` statement.
@@ -112,67 +89,53 @@ Let's build a histogram of the root-mean-square error (RMSE) for each forecast.
 Add a new **HistogramBuilder.cs** file with this class definition:
 
 ```csharp
-using System.Collections.Generic;
-using System.Linq;
-using XPlot.Plotly;
+using Microsoft.FSharp.Collections;
+using Plotly.NET;
 
-namespace Anomalies
+static class HistogramBuilder
 {
-    internal static class HistogramBuilder
+    public static GenericChart.GenericChart BuildHistogram(string groupName, ICollection<TimeSeriesAnalysis> analysisResults)
     {
-        public static PlotlyChart BuildHistogram(string groupName, ICollection<TimeSeriesAnalysis> analysisResults)
+        IEnumerable<Trace> traces = BuildTraces(analysisResults);
+        FSharpList<Trace> fSharpTraces = ListModule.OfSeq(traces);
+        GenericChart.GenericChart chart = BuildChart(groupName, fSharpTraces);
+        return chart;
+    }
+
+    private static IEnumerable<Trace> BuildTraces(ICollection<TimeSeriesAnalysis> analysisResults)
+    {
+        ILookup<string, ForecastDetails> forecastsByAlgorithm =
+            analysisResults.SelectMany(a => a.Forecasts)
+            .ToLookup(o => o.AlgorithmName);
+
+        double max = analysisResults.Max(a => a.Forecasts.Max(f => f.RegressionMetrics.RootMeanSquaredError));
+        int binSize = ((int)((max + 1) / 100)) * 10;
+
+        foreach (IGrouping<string, ForecastDetails> forecastGrouping in forecastsByAlgorithm)
         {
-            IEnumerable<Graph.Histogram> traces = BuildTraces(analysisResults);
-            PlotlyChart chart = BuildChart(groupName, traces);
-            return chart;
+            var trace = new Trace("histogram");
+            trace.SetValue("name", forecastGrouping.Key);
+            trace.SetValue("x", forecastGrouping.Select(f => f.RegressionMetrics.RootMeanSquaredError));
+            trace.SetValue("opacity", 0.75);
+            trace.SetValue("autobinx", false);
+
+            yield return trace;
         }
+    }
 
-        private static IEnumerable<Graph.Histogram> BuildTraces(ICollection<TimeSeriesAnalysis> analysisResults)
-        {
-            ILookup<string, ForecastDetails> forecastsByAlgorithm =
-                analysisResults.SelectMany(a => a.Forecasts)
-                .ToLookup(o => o.AlgorithmName);
+    private static GenericChart.GenericChart BuildChart(string groupName, FSharpList<Trace> traces)
+    {
+        Layout layout = new Layout();
+        layout.SetValue("width", 800);
+        layout.SetValue("height", 500);
+        layout.SetValue("showlegend", true);
+        layout.SetValue("barmode", "overlay");
 
-            double max = analysisResults.Max(a => a.Forecasts.Max(f => f.RegressionMetrics.RootMeanSquaredError));
-            int binSize = ((int)((max + 1) / 100)) * 10;
+        return Plotly.NET.GenericChart
+            .ofTraceObjects(true, traces)
+            .WithLayout(layout)
+            .WithTitle($"{groupName} RMSE");
 
-            foreach (IGrouping<string, ForecastDetails> forecastGrouping in forecastsByAlgorithm)
-            {
-                var trace = new Graph.Histogram
-                {
-                    name = forecastGrouping.Key,
-                    x = forecastGrouping.Select(f => f.RegressionMetrics.RootMeanSquaredError),
-                    opacity = 0.75,
-                    autobinx = false,
-                    xbins = new Graph.Xbins
-                    {
-                        start = 0,
-                        end = binSize * 10,
-                        size = binSize
-                    }
-                };
-
-                yield return trace;
-            }
-        }
-
-        private static PlotlyChart BuildChart(string groupName, IEnumerable<Graph.Histogram> traces)
-        {
-            PlotlyChart chart = Chart.Plot(traces);
-
-            var layout = new Layout.Layout
-            {
-                title = $"{groupName} RMSE",
-                barmode = "overlay"
-            };
-
-            chart.WithLayout(layout);
-            chart.Width = 800;
-            chart.Height = 500;
-            chart.WithLegend(true);
-
-            return chart;
-        }
     }
 }
 ```
@@ -181,23 +144,23 @@ This is ready to group results by algorithm once we have more forecasting algori
 
 ## Add the Histogram to the Charts
 
-Update the `ShowCharts` method in the `Program` class as follows to invoke the `HistogramBuilder`.
+Update the `ShowCharts` method in the **Program.cs** file as follows to invoke the `HistogramBuilder`.
 
 ```csharp
-private static void ShowCharts(TimeSeriesAnalysis[] analysisResults)
+static void ShowCharts(TimeSeriesAnalysis[] analysisResults)
 {
-    var charts = new List<PlotlyChart>();
+    var charts = new List<GenericChart.GenericChart>();
 
     foreach (TimeSeriesAnalysis analysis in analysisResults)
     {
-        PlotlyChart chart = ChartBuilder.BuildChart(analysis);
+        GenericChart.GenericChart chart = ChartBuilder.BuildChart(analysis);
         charts.Add(chart);
     }
 
     var histogram = HistogramBuilder.BuildHistogram("Stocks", analysisResults);
     charts.Add(histogram);
 
-    Chart.ShowAll(charts);
+    charts.ForEach(chart => chart.Show());
 }
 ```
 
